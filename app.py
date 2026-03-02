@@ -1,13 +1,14 @@
 import os
 import re
 import hashlib
-from flask import Flask, render_template_string, request, url_for
+import sqlite3
+from flask import Flask, render_template_string, request, url_for, g
 
 app = Flask(__name__)
 
-# Для продакшена лучше использовать базу данных,
-# но для простоты оставим в памяти (на Render всё равно хранится временно)
-wishlists = {}
+# Путь к базе данных (на Render будет храниться в /tmp, но на бесплатном тарифе 
+# всё равно может сбрасываться при перезапуске, но хотя бы не при каждом засыпании)
+DATABASE = os.path.join(os.path.dirname(__file__), 'wishlist.db')
 
 # База данных книг (названия из вашего списка)
 BOOKS_DB = {
@@ -159,6 +160,7 @@ BOOKS_DB = {
     '261060016': 'Шалости богини зимы'
 }
 
+# HTML-шаблон
 INDEX_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -226,9 +228,7 @@ INDEX_TEMPLATE = '''
 
     <script>
     function loadImage(img, vol, part, art, attempt = 1) {
-        // Перебираем basket от 01 до 50
         if (attempt > 50) {
-            // Если ничего не помогло, пробуем старый формат
             img.src = "https://images.wbstatic.net/big/" + art + "1.jpg";
             img.onerror = function() {
                 img.src = "https://via.placeholder.com/300x400?text=Нет+обложки";
@@ -241,7 +241,6 @@ INDEX_TEMPLATE = '''
         img.src = `https://basket-${basketNum}.wbbasket.ru/vol${vol}/part${part}/${art}/images/big/1.webp`;
         
         img.onerror = function() {
-            // Пробуем следующий basket
             loadImage(img, vol, part, art, attempt + 1);
         };
     }
@@ -249,6 +248,58 @@ INDEX_TEMPLATE = '''
 </body>
 </html>
 '''
+
+def get_db():
+    """Получить соединение с базой данных"""
+    db = getattr(g, '_database', None)
+    if db is None:
+        db = g._database = sqlite3.connect(DATABASE)
+        db.row_factory = sqlite3.Row
+    return db
+
+@app.teardown_appcontext
+def close_connection(exception):
+    """Закрыть соединение с БД после запроса"""
+    db = getattr(g, '_database', None)
+    if db is not None:
+        db.close()
+
+def init_db():
+    """Создать таблицы, если их нет"""
+    with app.app_context():
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS wishlists (
+                id TEXT PRIMARY KEY,
+                arts TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        db.commit()
+
+def save_wishlist_to_db(wish_id, arts_list):
+    """Сохранить вишлист в базу данных"""
+    with app.app_context():
+        db = get_db()
+        arts_json = ','.join(arts_list)
+        cursor = db.cursor()
+        cursor.execute(
+            'INSERT OR REPLACE INTO wishlists (id, arts) VALUES (?, ?)',
+            (wish_id, arts_json)
+        )
+        db.commit()
+
+def get_wishlist_from_db(wish_id):
+    """Получить вишлист из базы данных"""
+    with app.app_context():
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute('SELECT arts FROM wishlists WHERE id = ?', (wish_id,))
+        row = cursor.fetchone()
+        if row:
+            return row['arts'].split(',')
+        return None
 
 def extract_articul(link):
     """Извлекает артикул из ссылки"""
@@ -295,7 +346,8 @@ def index():
         
         if action == 'save':
             wish_id = generate_hash([b['art'] for b in books])
-            wishlists[wish_id] = books
+            # Сохраняем в базу данных
+            save_wishlist_to_db(wish_id, [b['art'] for b in books])
             saved_url = url_for('show_wishlist', wish_id=wish_id, _external=True)
             return render_template_string(INDEX_TEMPLATE, books=books, saved_url=saved_url, request=request)
         else:
@@ -305,12 +357,32 @@ def index():
 
 @app.route('/wishlist/<wish_id>')
 def show_wishlist(wish_id):
-    books = wishlists.get(wish_id)
-    if books is None:
-        return "Вишлист не найден", 404
+    # Получаем артикулы из базы данных
+    arts_list = get_wishlist_from_db(wish_id)
+    
+    if arts_list is None:
+        return "Вишлист не найден. Возможно, он был удалён или ещё не создан.", 404
+    
+    # Преобразуем артикулы в книги
+    books = []
+    for art in arts_list:
+        vol, part = get_vol_part(art)
+        title = BOOKS_DB.get(art, f'Книга {art}')
+        books.append({
+            'art': art,
+            'vol': vol,
+            'part': part,
+            'title': title,
+            'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
+        })
+    
     return render_template_string(INDEX_TEMPLATE, books=books)
 
 if __name__ == '__main__':
+    # Инициализируем базу данных при запуске
+    with app.app_context():
+        init_db()
+    
     # Для локального запуска и для хостинга
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
