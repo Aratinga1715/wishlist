@@ -6,9 +6,9 @@ from flask import Flask, render_template_string, request, url_for, g
 
 app = Flask(__name__)
 
-# Путь к базе данных (на Render будет храниться в /tmp, но на бесплатном тарифе 
-# всё равно может сбрасываться при перезапуске, но хотя бы не при каждом засыпании)
+# Путь к базе данных
 DATABASE = os.path.join(os.path.dirname(__file__), 'wishlist.db')
+print(f"📁 БАЗА ДАННЫХ БУДЕТ СОЗДАНА ПО ПУТИ: {DATABASE}")
 
 # База данных книг (названия из вашего списка)
 BOOKS_DB = {
@@ -160,7 +160,7 @@ BOOKS_DB = {
     '261060016': 'Шалости богини зимы'
 }
 
-# HTML-шаблон
+# HTML-шаблон (полностью совпадает с вашим)
 INDEX_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -253,6 +253,7 @@ def get_db():
     """Получить соединение с базой данных"""
     db = getattr(g, '_database', None)
     if db is None:
+        print(f"🔌 СОЗДАЁМ НОВОЕ ПОДКЛЮЧЕНИЕ К БД: {DATABASE}")
         db = g._database = sqlite3.connect(DATABASE)
         db.row_factory = sqlite3.Row
     return db
@@ -262,6 +263,7 @@ def close_connection(exception):
     """Закрыть соединение с БД после запроса"""
     db = getattr(g, '_database', None)
     if db is not None:
+        print("🔌 ЗАКРЫВАЕМ ПОДКЛЮЧЕНИЕ К БД")
         db.close()
 
 def init_db():
@@ -277,9 +279,11 @@ def init_db():
             )
         ''')
         db.commit()
+        print("✅ ТАБЛИЦА wishlists ПРОВЕРЕНА/СОЗДАНА")
 
 def save_wishlist_to_db(wish_id, arts_list):
     """Сохранить вишлист в базу данных"""
+    print(f"💾 СОХРАНЯЕМ ВИШЛИСТ: {wish_id} с {len(arts_list)} книгами")
     with app.app_context():
         db = get_db()
         arts_json = ','.join(arts_list)
@@ -289,16 +293,21 @@ def save_wishlist_to_db(wish_id, arts_list):
             (wish_id, arts_json)
         )
         db.commit()
+        print(f"✅ ВИШЛИСТ {wish_id} УСПЕШНО СОХРАНЁН В БД")
 
 def get_wishlist_from_db(wish_id):
     """Получить вишлист из базы данных"""
+    print(f"🔍 ИЩЕМ ВИШЛИСТ В БД: {wish_id}")
     with app.app_context():
         db = get_db()
         cursor = db.cursor()
         cursor.execute('SELECT arts FROM wishlists WHERE id = ?', (wish_id,))
         row = cursor.fetchone()
         if row:
-            return row['arts'].split(',')
+            arts = row['arts'].split(',')
+            print(f"✅ ВИШЛИСТ {wish_id} НАЙДЕН, книг: {len(arts)}")
+            return arts
+        print(f"❌ ВИШЛИСТ {wish_id} НЕ НАЙДЕН В БД")
         return None
 
 def extract_articul(link):
@@ -320,10 +329,12 @@ def generate_hash(arts):
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    print("🏠 ГЛАВНАЯ СТРАНИЦА ЗАГРУЖЕНА")
     if request.method == 'POST':
         raw_links = request.form.get('links', '').splitlines()
         links = [l.strip() for l in raw_links if l.strip()]
         action = request.form.get('action', 'show')
+        print(f"📝 ПОЛУЧЕН POST-ЗАПРОС, действие: {action}, ссылок: {len(links)}")
         
         if not links:
             return render_template_string(INDEX_TEMPLATE, error='Введите ссылки')
@@ -344,11 +355,15 @@ def index():
                     'url': link
                 })
         
+        print(f"📚 ОБРАБОТАНО {len(books)} УНИКАЛЬНЫХ КНИГ")
+        
         if action == 'save':
             wish_id = generate_hash([b['art'] for b in books])
+            print(f"🔑 СГЕНЕРИРОВАН ID ВИШЛИСТА: {wish_id}")
             # Сохраняем в базу данных
             save_wishlist_to_db(wish_id, [b['art'] for b in books])
             saved_url = url_for('show_wishlist', wish_id=wish_id, _external=True)
+            print(f"🔗 ССЫЛКА НА ВИШЛИСТ: {saved_url}")
             return render_template_string(INDEX_TEMPLATE, books=books, saved_url=saved_url, request=request)
         else:
             return render_template_string(INDEX_TEMPLATE, books=books, request=request)
@@ -357,10 +372,12 @@ def index():
 
 @app.route('/wishlist/<wish_id>')
 def show_wishlist(wish_id):
+    print(f"👀 ЗАПРОС ВИШЛИСТА: {wish_id}")
     # Получаем артикулы из базы данных
     arts_list = get_wishlist_from_db(wish_id)
     
     if arts_list is None:
+        print(f"❌ ВИШЛИСТ {wish_id} НЕ НАЙДЕН")
         return "Вишлист не найден. Возможно, он был удалён или ещё не создан.", 404
     
     # Преобразуем артикулы в книги
@@ -376,13 +393,21 @@ def show_wishlist(wish_id):
             'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
         })
     
+    print(f"✅ ВИШЛИСТ {wish_id} УСПЕШНО ЗАГРУЖЕН, книг: {len(books)}")
     return render_template_string(INDEX_TEMPLATE, books=books)
 
 if __name__ == '__main__':
     # Инициализируем базу данных при запуске
     with app.app_context():
         init_db()
+        # Проверим, есть ли уже записи в БД
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute('SELECT COUNT(*) as count FROM wishlists')
+        count = cursor.fetchone()['count']
+        print(f"📊 В БД НАХОДИТСЯ {count} СОХРАНЁННЫХ ВИШЛИСТОВ")
     
     # Для локального запуска и для хостинга
     port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 ЗАПУСК СЕРВЕРА НА ПОРТУ {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
