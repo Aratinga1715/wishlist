@@ -13,7 +13,7 @@ app = Flask(__name__)
 # Путь к базе данных
 DATABASE = os.path.join(os.path.dirname(__file__), 'wishlist.db')
 
-# HTML-шаблон (с сортировкой и фильтрацией) – оставляем без изменений
+# HTML-шаблон (с сортировкой и фильтрацией) – без изменений
 INDEX_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -225,9 +225,56 @@ def init_db():
             print("✅ Добавлена колонка books_data в таблицу wishlists")
         db.commit()
 
-# ------------------ Функция получения данных через HTML-парсинг ------------------
+# ------------------ Функция получения данных (API поиска + fallback) ------------------
 def fetch_book_data(art):
-    """Получить данные о книге, парся HTML страницы Wildberries"""
+    """Получить данные о книге сначала через поисковый API, затем через HTML-парсинг"""
+    # 1. Пытаемся через поисковый API (ранее работал)
+    search_url = "https://search.wb.ru/exactmatch/ru/common/v4/search"
+    params = {
+        'query': art,
+        'resultset': 'catalog',
+        'sort': 'popular',
+        'limit': 1,
+        'spp': '30',
+        'curr': 'rub',
+        'dest': '-1257786'
+    }
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': 'https://www.wildberries.ru/',
+        'Origin': 'https://www.wildberries.ru',
+    }
+    try:
+        time.sleep(1.5)  # задержка между запросами
+        resp = requests.get(search_url, params=params, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            products = data.get('data', {}).get('products', [])
+            if products and str(products[0].get('id')) == art:
+                prod = products[0]
+                title = prod.get('name', f'Книга {art}')
+                price = prod.get('salePriceU') or prod.get('priceU', 0)
+                old_price = prod.get('priceU', 0)
+                price = price // 100 if price else 0
+                old_price = old_price // 100 if old_price else 0
+                return {
+                    'art': art,
+                    'title': title,
+                    'price': price,
+                    'old_price': old_price if old_price > price else None,
+                    'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
+                }
+        else:
+            print(f"⚠️ Поисковый API для {art} вернул статус {resp.status_code}")
+    except Exception as e:
+        print(f"⚠️ Ошибка поискового API для {art}: {e}")
+
+    # 2. Если поисковый API не сработал, пробуем парсинг HTML
+    return parse_html_fallback(art)
+
+def parse_html_fallback(art):
+    """Запасной метод: парсинг HTML страницы товара"""
     url = f"https://www.wildberries.ru/catalog/{art}/detail.aspx"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -236,14 +283,13 @@ def fetch_book_data(art):
         'Connection': 'keep-alive',
     }
     try:
-        time.sleep(1.5)  # задержка между запросами
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code != 200:
             print(f"⚠️ Ошибка загрузки страницы для {art}: статус {resp.status_code}")
             return None
         soup = BeautifulSoup(resp.text, 'html.parser')
 
-        # --- Название ---
+        # Название
         title = f'Книга {art}'
         title_tag = soup.find('h1', class_='product-page__title')
         if not title_tag:
@@ -251,11 +297,11 @@ def fetch_book_data(art):
         if title_tag:
             title = title_tag.text.strip()
 
-        # --- Цены ---
+        # Цены
         price = 0
         old_price = None
 
-        # 1. Попробуем найти в JSON-скрипте window.__IM__
+        # Ищем в JSON-скрипте
         script_tag = soup.find('script', text=re.compile(r'window\.__IM__\s*='))
         if script_tag:
             script_text = script_tag.string
@@ -268,13 +314,12 @@ def fetch_book_data(art):
                         prod = products[0]
                         price = prod.get('salePriceU') or prod.get('priceU', 0)
                         old_price = prod.get('priceU', 0)
-                        # цены в копейках -> рубли
                         price = price // 100 if price else 0
                         old_price = old_price // 100 if old_price else 0
                 except:
                     pass
 
-        # 2. Если не нашли, ищем в HTML
+        # Если не нашли, ищем в HTML
         if price == 0:
             final_price_elem = soup.find('span', class_='final-price')
             if not final_price_elem:
@@ -309,7 +354,6 @@ def save_wishlist_to_db(wish_id, arts_list):
         if data:
             books_data.append(data)
         else:
-            # Заглушка
             books_data.append({
                 'art': art,
                 'title': f'Книга {art}',
