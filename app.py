@@ -2,165 +2,18 @@ import os
 import re
 import hashlib
 import sqlite3
+import json
+import time
+import requests
+from bs4 import BeautifulSoup
 from flask import Flask, render_template_string, request, url_for, g
 
 app = Flask(__name__)
 
 # Путь к базе данных
 DATABASE = os.path.join(os.path.dirname(__file__), 'wishlist.db')
-print(f"📁 БАЗА ДАННЫХ БУДЕТ СОЗДАНА ПО ПУТИ: {DATABASE}")
 
-# База данных книг (названия из вашего списка)
-BOOKS_DB = {
-    '254490346': 'Боги, шаманы и призраки Кореи',
-    '195850940': 'Жирандоль',
-    '304313602': 'Мифы Центральной и Южной Америки',
-    '435821694': 'Легенды и мифы Древней Греции',
-    '551580533': 'Герои и их враги в русской мифологии',
-    '186860075': 'Корейские мифы',
-    '770963389': 'Йокларга теләмәгән бурсык малае',
-    '242058030': 'Мифы Румынии',
-    '347392021': 'Вампирский клуб вязания',
-    '232764065': 'Мифы Китая',
-    '387609762': 'Даха Тараторина. Крапива',
-    '202286859': 'Смешарики. История культовой Вселенной',
-    '315112696': 'Каштанка и другие рассказы',
-    '196720398': 'Кельтские мифы',
-    '188272409': 'Сердцецветы для охотницы',
-    '668447511': 'Дом чудной на улице Лесной',
-    '106067824': 'Оранжерея на краю света',
-    '119442051': 'Гипотеза любви',
-    '289470719': 'Волшебный магазин Токкэби',
-    '768311101': 'Три мушкетера. Том 2',
-    '323295243': 'Пожиратель душ в Оксфорде',
-    '2291984': 'Повелитель мух',
-    '432559728': 'Арабские мифы',
-    '710243293': 'Любовь под омелой',
-    '323294822': 'Убийство в чайной "Бузина"',
-    '696125761': 'Змеелов. Гадючий остров',
-    '307749445': 'Мифы Тибета',
-    '363113220': 'Буддийские мифы',
-    '395615966': 'Казахские мифы',
-    '650030182': 'Замурчательное фэнтези',
-    '248787055': 'Мифы Русского Севера, Сибири и Дальнего Востока',
-    '271183099': 'Сказы',
-    '475646180': 'Ловец кошмаров',
-    '756316149': 'Медленной шлюпкой в Китай',
-    '378773065': 'Путешествие к центру Земли',
-    '496211210': 'Служба устранения магических конфузов',
-    '307749496': 'Мифы о сотворении мира и конце света',
-    '44883920': 'Тун. Лето в розовом городе',
-    '535473897': 'Лавка сладостей на Сумеречной аллее',
-    '451587010': 'Турецкие мифы',
-    '525815547': 'Русская готика',
-    '624737741': 'Татарский язык без репетитора',
-    '196130396': 'Монгольские мифы',
-    '629049401': 'Астра. Омнибус',
-    '717360130': 'КОМПЛЕКТ из 3 книг Пощады, маэстрина!',
-    '456386460': 'Мифы западных славян',
-    '552800731': 'Мифология Средиземья',
-    '279824145': 'Мифы народов Кавказа',
-    '642837335': 'Три мушкетера. Том 1',
-    '367385895': 'Лавка сновидений Юнсыль',
-    '656756127': 'Ничья на карусели',
-    '146178904': 'Русалки и водяные',
-    '217366123': 'Мифы Индии',
-    '404028350': 'От первого лица',
-    '292880046': 'Комплект книг 48 минут. Осколки + Пепел',
-    '615911657': 'Узорчатая парча',
-    '588552439': 'Рождество в Голливуде',
-    '303705185': 'Магазинчик времени. Башня воспоминаний',
-    '507852458': 'Астра. Омнибус',
-    '343261963': 'Мифы Австралии, Новой Зеландии и Полинезии',
-    '246292082': 'Книжный в сердце Парижа',
-    '215129859': 'Логика. Упражнения по логике',
-    '22272588': 'Шоколадная лавка в Париже',
-    '628001708': 'Струны волшебства',
-    '544877544': 'Большие подарочные сборники. Враки. Йага и Аир',
-    '387580771': 'Когда солнце взойдет на западе',
-    '88806167': 'Драконы обожают принцесс',
-    '551581005': 'Магия народов мира',
-    '588745943': 'Анна Ахматова. Перчатка с левой руки',
-    '170219341': 'Славянские мифы',
-    '499260436': 'Цитадель',
-    '165150869': 'Последняя из рода Мун',
-    '366442174': 'Танцовщица',
-    '539198750': 'Год крысы',
-    '275463847': 'Даха Тараторина. Аир. Хозяин болота',
-    '497956695': 'Мифы о животных и мифических существах',
-    '395616560': 'Германские мифы',
-    '297709817': 'Отель потерянных душ. Госпожа управляющая',
-    '262323634': 'Проделки бога лета',
-    '316619592': 'Мифы Кореи. Раскрась легенду',
-    '239009176': 'Боги, духи и ёкаи японской мифологии',
-    '699506848': 'Кото-математика',
-    '264612479': 'Мифы Карелии и Ингерманландии',
-    '177700538': 'Японские мифы',
-    '146500006': 'Булгаков. Жизнь господина де Мольера',
-    '52447320': 'Ведьмак, все романы цикла в одном томе',
-    '505459035': 'Странная история доктора Джекила и мистера Хайда',
-    '175486361': 'Приморская академия',
-    '311648108': 'Мифы шумеров',
-    '689408579': 'Мифы времен года',
-    '220050625': 'Химеры среди нас',
-    '274287384': 'Книжная деревушка в Шотландии',
-    '449583729': 'Что я узнала в книжном "Кобаяси"',
-    '92326906': 'Встретимся в кафе "Капкейк"',
-    '234935571': 'Профессия ведьма. Том 1',
-    '333495441': 'О нефрите и драконах',
-    '262013394': 'Демон. Вечные истории',
-    '269373581': 'Алая Топь',
-    '237272123': 'Затерянный книжный',
-    '439785703': 'ПОПКУЛЬТ 2000',
-    '349604316': 'Чудовище во мраке',
-    '322922296': 'Волчица, покорившая хаос',
-    '310112075': 'Космоолухи Рядом. Комплект из 2 книг',
-    '668241663': 'В Рождество у каждого свой секрет',
-    '170218636': 'Скандинавские мифы',
-    '247408157': 'Космоолухи (трилогия)',
-    '256688440': 'Космоолухи. Киберканикулы',
-    '365134388': 'Затерянный мир',
-    '237122417': 'Даха Тараторина. Йага',
-    '262323929': 'Дочь Горгоны',
-    '263007703': 'Благие знамения',
-    '525031044': 'Магазинчик времени. Башня воспоминаний',
-    '399565246': 'Чернильные души',
-    '776458268': 'Дети из камеры хранения',
-    '714760285': 'Мужчины без женщин',
-    '178345589': 'Две зимы',
-    '599315404': 'Рыжее братство',
-    '289470903': 'Дни в книжном Морисаки',
-    '400639743': 'Когда засияет Журавль',
-    '714936485': 'Мифы о драконах',
-    '568470639': 'Народные промыслы на Руси',
-    '439946117': 'Благие знамения',
-    '263006856': 'Благие знамения',
-    '502631241': 'Эра Думер Жрец со щитом',
-    '325685784': 'Отель потерянных душ. Госпожа проводница эфира',
-    '172564381': 'Властелин Колец трилогия',
-    '711908464': 'Любовь под омелой',
-    '711681905': 'Сердца трех',
-    '178350525': 'Египетские мифы',
-    '74516131': 'Булгаков Мастер и Маргарита',
-    '486434480': 'Пушистое счастье',
-    '215144314': 'Мифы Урала и Поволжья',
-    '658228631': 'Смерть, отбор и котики',
-    '356112147': 'Плохие девчонки Древней Греции',
-    '545000878': 'Крысявки 2.0',
-    '105029241': 'Гипотеза любви',
-    '701597224': 'Книги романы. Любовь и вереск',
-    '578779011': 'Кафе "Пряная тыква"',
-    '589663543': 'Вечера на хуторе близ Диканьки',
-    '724664931': 'Кошачий глаз в волшебный час',
-    '501368603': 'Сказки народов Поволжья',
-    '662891987': 'Шах и мат',
-    '363334390': 'Персидские мифы',
-    '515494099': 'Одиночка. Книги 1-3',
-    '189317929': 'Шах и мат',
-    '261060016': 'Шалости богини зимы'
-}
-
-# HTML-шаблон (полностью совпадает с вашим)
+# HTML-шаблон (с сортировкой и фильтрацией) – оставляем без изменений
 INDEX_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -175,17 +28,25 @@ INDEX_TEMPLATE = '''
         textarea { width: 100%; padding: 15px; margin: 10px 0; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; box-sizing: border-box; }
         button { background: #b99e7c; color: white; padding: 12px 20px; border: none; border-radius: 40px; cursor: pointer; font-size: 16px; margin-right: 10px; margin-bottom: 10px; }
         button:hover { background: #a08462; }
-        .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; margin-top: 30px; }
-        .book-card { text-align: center; padding: 10px; border: 1px solid #e2d5c0; border-radius: 8px; background: #fffcf5; }
+        .controls { margin: 20px 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        .sort-select, .filter-select { padding: 8px; border-radius: 20px; border: 1px solid #ccc; background: white; }
+        .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; margin-top: 20px; }
+        .book-card { text-align: center; padding: 15px; border: 1px solid #e2d5c0; border-radius: 8px; background: #fffcf5; }
         .book-image { width: 120px; height: 160px; object-fit: contain; border: 1px solid #ddd; border-radius: 4px; background: #f9f9f9; }
-        .book-title { margin: 8px 0; font-weight: bold; font-size: 13px; color: #2c1e12; min-height: 35px; overflow: hidden; }
+        .book-title { margin: 8px 0; font-weight: bold; font-size: 14px; color: #2c1e12; min-height: 40px; overflow: hidden; }
+        .book-price { font-size: 18px; color: #b12704; margin: 5px 0; }
+        .book-old-price { font-size: 14px; color: #666; text-decoration: line-through; margin-right: 8px; }
         .book-link { display: inline-block; padding: 6px 12px; background: #f2e8d8; border-radius: 20px; text-decoration: none; color: #3e2e1f; font-size: 13px; }
         .book-link:hover { background: #b99e7c; color: white; }
         .stats { margin-top: 20px; color: #666; }
         .share-link { margin-top: 20px; padding: 15px; background: #f2e8d8; border-radius: 8px; word-break: break-all; }
         .share-link input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        .loading { display: none; text-align: center; padding: 20px; }
+        .price-filter { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; }
+        .price-filter button { background: #e2d5c0; color: #3e2e1f; padding: 5px 10px; border: none; border-radius: 20px; cursor: pointer; font-size: 12px; }
+        .price-filter button.active { background: #b99e7c; color: white; }
         @media (max-width: 600px) {
-            .book-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+            .book-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
             .book-image { width: 100px; height: 140px; }
         }
     </style>
@@ -194,11 +55,12 @@ INDEX_TEMPLATE = '''
     <div class="container">
         <h1>📚 Книжный вишлист</h1>
         
-        <form method="post" id="mainForm">
+        <form method="post" id="mainForm" onsubmit="showLoading()">
             <textarea name="links" rows="8" placeholder="Вставьте ссылки на Wildberries (каждая с новой строки)">{{ request.form.get('links', '') }}</textarea>
             <br>
-            <button type="submit" name="action" value="show">📋 Показать книги</button>
+            <button type="submit" name="action" value="show">📋 Только показать</button>
             <button type="submit" name="action" value="save">💾 Сохранить и получить ссылку</button>
+            <div class="loading" id="loading">⏳ Загрузка данных с Wildberries, это может занять некоторое время...</div>
         </form>
 
         {% if saved_url %}
@@ -210,19 +72,46 @@ INDEX_TEMPLATE = '''
         {% endif %}
 
         {% if books %}
-        <div class="book-grid">
+        <div class="controls">
+            <select class="sort-select" id="sortSelect">
+                <option value="price-asc">По цене (сначала дешёвые)</option>
+                <option value="price-desc">По цене (сначала дорогие)</option>
+                <option value="title">По названию</option>
+            </select>
+            
+            <div class="price-filter" id="priceFilter">
+                <button data-min="0" data-max="350">до 350 ₽</button>
+                <button data-min="351" data-max="550">351-550 ₽</button>
+                <button data-min="551" data-max="1200">551-1200 ₽</button>
+                <button data-min="1201" data-max="1800">1201-1800 ₽</button>
+                <button data-min="1801" data-max="2200">1801-2200 ₽</button>
+                <button data-min="2201" data-max="3500">2201-3500 ₽</button>
+                <button data-min="3501" data-max="5000">3501-5000 ₽</button>
+                <button data-min="5001" data-max="7000">5001-7000 ₽</button>
+                <button data-min="7001" data-max="999999">от 7001 ₽</button>
+                <button data-min="0" data-max="999999" class="active">Все</button>
+            </div>
+        </div>
+
+        <div class="book-grid" id="bookGrid">
             {% for book in books %}
-            <div class="book-card">
+            <div class="book-card" data-price="{{ book.price }}" data-title="{{ book.title }}">
                 <img class="book-image" 
                      src="https://basket-01.wbbasket.ru/vol{{ book.vol }}/part{{ book.part }}/{{ book.art }}/images/big/1.webp"
                      onerror="loadImage(this, '{{ book.vol }}', '{{ book.part }}', '{{ book.art }}')"
                      alt="{{ book.title }}">
                 <div class="book-title">{{ book.title }}</div>
+                <div class="book-price">
+                    {% if book.old_price and book.old_price > book.price %}
+                        <span class="book-old-price">{{ book.old_price }} ₽</span>
+                    {% endif %}
+                    {{ book.price }} ₽
+                </div>
                 <a class="book-link" href="{{ book.url }}" target="_blank">📖 Открыть</a>
             </div>
             {% endfor %}
         </div>
-        <div class="stats">Найдено книг: {{ books|length }}</div>
+        <div class="stats">Найдено книг: <span id="bookCount">{{ books|length }}</span></div>
         {% endif %}
     </div>
 
@@ -236,38 +125,88 @@ INDEX_TEMPLATE = '''
             };
             return;
         }
-        
         const basketNum = attempt.toString().padStart(2, '0');
         img.src = `https://basket-${basketNum}.wbbasket.ru/vol${vol}/part${part}/${art}/images/big/1.webp`;
-        
         img.onerror = function() {
             loadImage(img, vol, part, art, attempt + 1);
         };
     }
+
+    function showLoading() {
+        document.getElementById('loading').style.display = 'block';
+    }
+
+    // Сортировка и фильтрация
+    document.addEventListener('DOMContentLoaded', function() {
+        const bookGrid = document.getElementById('bookGrid');
+        const bookCards = Array.from(document.querySelectorAll('.book-card'));
+        const sortSelect = document.getElementById('sortSelect');
+        const priceFilter = document.getElementById('priceFilter');
+        const bookCountSpan = document.getElementById('bookCount');
+
+        let currentFilterMin = 0;
+        let currentFilterMax = 999999;
+
+        function filterAndSort() {
+            // Фильтр по цене
+            let filtered = bookCards.filter(card => {
+                const price = parseInt(card.dataset.price);
+                return price >= currentFilterMin && price <= currentFilterMax;
+            });
+
+            // Сортировка
+            const sortValue = sortSelect.value;
+            filtered.sort((a, b) => {
+                if (sortValue === 'price-asc') {
+                    return parseInt(a.dataset.price) - parseInt(b.dataset.price);
+                } else if (sortValue === 'price-desc') {
+                    return parseInt(b.dataset.price) - parseInt(a.dataset.price);
+                } else if (sortValue === 'title') {
+                    return a.dataset.title.localeCompare(b.dataset.title);
+                }
+            });
+
+            // Перестроить DOM
+            bookGrid.innerHTML = '';
+            filtered.forEach(card => bookGrid.appendChild(card));
+            bookCountSpan.textContent = filtered.length;
+        }
+
+        sortSelect.addEventListener('change', filterAndSort);
+
+        priceFilter.addEventListener('click', function(e) {
+            if (e.target.tagName === 'BUTTON') {
+                priceFilter.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+                e.target.classList.add('active');
+                
+                currentFilterMin = parseInt(e.target.dataset.min);
+                currentFilterMax = parseInt(e.target.dataset.max);
+                filterAndSort();
+            }
+        });
+
+        filterAndSort();
+    });
     </script>
 </body>
 </html>
 '''
 
+# ------------------ Работа с базой данных ------------------
 def get_db():
-    """Получить соединение с базой данных"""
     db = getattr(g, '_database', None)
     if db is None:
-        print(f"🔌 СОЗДАЁМ НОВОЕ ПОДКЛЮЧЕНИЕ К БД: {DATABASE}")
         db = g._database = sqlite3.connect(DATABASE)
         db.row_factory = sqlite3.Row
     return db
 
 @app.teardown_appcontext
 def close_connection(exception):
-    """Закрыть соединение с БД после запроса"""
     db = getattr(g, '_database', None)
     if db is not None:
-        print("🔌 ЗАКРЫВАЕМ ПОДКЛЮЧЕНИЕ К БД")
         db.close()
 
 def init_db():
-    """Создать таблицы, если их нет"""
     with app.app_context():
         db = get_db()
         cursor = db.cursor()
@@ -278,136 +217,213 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        cursor.execute("PRAGMA table_info(wishlists)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'books_data' not in columns:
+            cursor.execute("ALTER TABLE wishlists ADD COLUMN books_data TEXT")
+            db.commit()
+            print("✅ Добавлена колонка books_data в таблицу wishlists")
         db.commit()
-        print("✅ ТАБЛИЦА wishlists ПРОВЕРЕНА/СОЗДАНА")
 
-def save_wishlist_to_db(wish_id, arts_list):
-    """Сохранить вишлист в базу данных"""
-    print(f"💾 СОХРАНЯЕМ ВИШЛИСТ: {wish_id} с {len(arts_list)} книгами")
-    with app.app_context():
-        db = get_db()
-        arts_json = ','.join(arts_list)
-        cursor = db.cursor()
-        cursor.execute(
-            'INSERT OR REPLACE INTO wishlists (id, arts) VALUES (?, ?)',
-            (wish_id, arts_json)
-        )
-        db.commit()
-        print(f"✅ ВИШЛИСТ {wish_id} УСПЕШНО СОХРАНЁН В БД")
+# ------------------ Функция получения данных через HTML-парсинг ------------------
+def fetch_book_data(art):
+    """Получить данные о книге, парся HTML страницы Wildberries"""
+    url = f"https://www.wildberries.ru/catalog/{art}/detail.aspx"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Connection': 'keep-alive',
+    }
+    try:
+        time.sleep(1.5)  # задержка между запросами
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            print(f"⚠️ Ошибка загрузки страницы для {art}: статус {resp.status_code}")
+            return None
+        soup = BeautifulSoup(resp.text, 'html.parser')
 
-def get_wishlist_from_db(wish_id):
-    """Получить вишлист из базы данных"""
-    print(f"🔍 ИЩЕМ ВИШЛИСТ В БД: {wish_id}")
-    with app.app_context():
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute('SELECT arts FROM wishlists WHERE id = ?', (wish_id,))
-        row = cursor.fetchone()
-        if row:
-            arts = row['arts'].split(',')
-            print(f"✅ ВИШЛИСТ {wish_id} НАЙДЕН, книг: {len(arts)}")
-            return arts
-        print(f"❌ ВИШЛИСТ {wish_id} НЕ НАЙДЕН В БД")
+        # --- Название ---
+        title = f'Книга {art}'
+        title_tag = soup.find('h1', class_='product-page__title')
+        if not title_tag:
+            title_tag = soup.find('h1')
+        if title_tag:
+            title = title_tag.text.strip()
+
+        # --- Цены ---
+        price = 0
+        old_price = None
+
+        # 1. Попробуем найти в JSON-скрипте window.__IM__
+        script_tag = soup.find('script', text=re.compile(r'window\.__IM__\s*='))
+        if script_tag:
+            script_text = script_tag.string
+            match = re.search(r'window\.__IM__\s*=\s*({.*?});\s*$', script_text, re.DOTALL)
+            if match:
+                try:
+                    data = json.loads(match.group(1))
+                    products = data.get('state', {}).get('products', [])
+                    if products:
+                        prod = products[0]
+                        price = prod.get('salePriceU') or prod.get('priceU', 0)
+                        old_price = prod.get('priceU', 0)
+                        # цены в копейках -> рубли
+                        price = price // 100 if price else 0
+                        old_price = old_price // 100 if old_price else 0
+                except:
+                    pass
+
+        # 2. Если не нашли, ищем в HTML
+        if price == 0:
+            final_price_elem = soup.find('span', class_='final-price')
+            if not final_price_elem:
+                final_price_elem = soup.find('span', class_='price-block__final-price')
+            if final_price_elem:
+                price_text = final_price_elem.text.replace('₽', '').strip()
+                price = int(re.sub(r'\D', '', price_text)) if price_text else 0
+
+            old_price_elem = soup.find('del', class_='price-block__old-price')
+            if old_price_elem:
+                old_text = old_price_elem.text.replace('₽', '').strip()
+                old_price = int(re.sub(r'\D', '', old_text)) if old_text else None
+
+        return {
+            'art': art,
+            'title': title,
+            'price': price,
+            'old_price': old_price if old_price and old_price > price else None,
+            'url': url
+        }
+    except Exception as e:
+        print(f"❌ Ошибка при парсинге {art}: {e}")
         return None
 
+# ------------------ Сохранение и получение вишлистов ------------------
+def save_wishlist_to_db(wish_id, arts_list):
+    books_data = []
+    total = len(arts_list)
+    for idx, art in enumerate(arts_list, 1):
+        print(f"⏳ Загружаю {idx}/{total}: артикул {art}")
+        data = fetch_book_data(art)
+        if data:
+            books_data.append(data)
+        else:
+            # Заглушка
+            books_data.append({
+                'art': art,
+                'title': f'Книга {art}',
+                'price': 0,
+                'old_price': None,
+                'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
+            })
+    with app.app_context():
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute(
+            'INSERT OR REPLACE INTO wishlists (id, arts, books_data) VALUES (?, ?, ?)',
+            (wish_id, ','.join(arts_list), json.dumps(books_data, ensure_ascii=False))
+        )
+        db.commit()
+    print(f"✅ Вишлист {wish_id} сохранён с {len(books_data)} книгами")
+    return books_data
+
+def get_wishlist_from_db(wish_id):
+    with app.app_context():
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute('SELECT books_data FROM wishlists WHERE id = ?', (wish_id,))
+        row = cursor.fetchone()
+        if row and row['books_data']:
+            return json.loads(row['books_data'])
+        return None
+
+# ------------------ Вспомогательные функции ------------------
 def extract_articul(link):
-    """Извлекает артикул из ссылки"""
     match = re.search(r'catalog/(\d+)', link)
     return match.group(1) if match else None
 
 def get_vol_part(art):
-    """Вычисляет vol и part по реальной структуре Wildberries"""
     art = str(art)
-    vol = art[:4]      # первые 4 цифры
-    part = art[:6]     # первые 6 цифр
+    vol = art[:4]
+    part = art[:6]
     return vol, part
 
 def generate_hash(arts):
-    """Создаёт уникальный хеш для вишлиста"""
     data = ','.join(sorted(arts))
     return hashlib.md5(data.encode()).hexdigest()[:8]
 
+# ------------------ Маршруты ------------------
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    print("🏠 ГЛАВНАЯ СТРАНИЦА ЗАГРУЖЕНА")
     if request.method == 'POST':
         raw_links = request.form.get('links', '').splitlines()
         links = [l.strip() for l in raw_links if l.strip()]
         action = request.form.get('action', 'show')
-        print(f"📝 ПОЛУЧЕН POST-ЗАПРОС, действие: {action}, ссылок: {len(links)}")
         
         if not links:
             return render_template_string(INDEX_TEMPLATE, error='Введите ссылки')
         
-        books = []
-        seen_arts = set()
+        arts = set()
         for link in links:
             art = extract_articul(link)
-            if art and art not in seen_arts:
-                seen_arts.add(art)
-                vol, part = get_vol_part(art)
-                title = BOOKS_DB.get(art, f'Книга {art}')
-                books.append({
-                    'art': art,
-                    'vol': vol,
-                    'part': part,
-                    'title': title,
-                    'url': link
-                })
-        
-        print(f"📚 ОБРАБОТАНО {len(books)} УНИКАЛЬНЫХ КНИГ")
+            if art:
+                arts.add(art)
+        arts_list = list(arts)
         
         if action == 'save':
-            wish_id = generate_hash([b['art'] for b in books])
-            print(f"🔑 СГЕНЕРИРОВАН ID ВИШЛИСТА: {wish_id}")
-            # Сохраняем в базу данных
-            save_wishlist_to_db(wish_id, [b['art'] for b in books])
+            wish_id = generate_hash(arts_list)
+            books_data = save_wishlist_to_db(wish_id, arts_list)
             saved_url = url_for('show_wishlist', wish_id=wish_id, _external=True)
-            print(f"🔗 ССЫЛКА НА ВИШЛИСТ: {saved_url}")
-            return render_template_string(INDEX_TEMPLATE, books=books, saved_url=saved_url, request=request)
+            return render_template_string(INDEX_TEMPLATE, books=books_data, saved_url=saved_url, request=request)
         else:
-            return render_template_string(INDEX_TEMPLATE, books=books, request=request)
+            books_data = []
+            total = len(arts_list)
+            for idx, art in enumerate(arts_list, 1):
+                print(f"⏳ Загружаю {idx}/{total}: артикул {art}")
+                data = fetch_book_data(art)
+                if data:
+                    vol, part = get_vol_part(art)
+                    data['vol'] = vol
+                    data['part'] = part
+                    books_data.append(data)
+                else:
+                    vol, part = get_vol_part(art)
+                    books_data.append({
+                        'art': art,
+                        'vol': vol,
+                        'part': part,
+                        'title': f'Книга {art}',
+                        'price': 0,
+                        'old_price': None,
+                        'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
+                    })
+            return render_template_string(INDEX_TEMPLATE, books=books_data, request=request)
     
     return render_template_string(INDEX_TEMPLATE)
 
 @app.route('/wishlist/<wish_id>')
 def show_wishlist(wish_id):
-    print(f"👀 ЗАПРОС ВИШЛИСТА: {wish_id}")
-    # Получаем артикулы из базы данных
-    arts_list = get_wishlist_from_db(wish_id)
-    
-    if arts_list is None:
-        print(f"❌ ВИШЛИСТ {wish_id} НЕ НАЙДЕН")
+    books_data = get_wishlist_from_db(wish_id)
+    if books_data is None:
         return "Вишлист не найден. Возможно, он был удалён или ещё не создан.", 404
     
-    # Преобразуем артикулы в книги
-    books = []
-    for art in arts_list:
-        vol, part = get_vol_part(art)
-        title = BOOKS_DB.get(art, f'Книга {art}')
-        books.append({
-            'art': art,
-            'vol': vol,
-            'part': part,
-            'title': title,
-            'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
-        })
-    
-    print(f"✅ ВИШЛИСТ {wish_id} УСПЕШНО ЗАГРУЖЕН, книг: {len(books)}")
-    return render_template_string(INDEX_TEMPLATE, books=books)
+    for book in books_data:
+        vol, part = get_vol_part(book['art'])
+        book['vol'] = vol
+        book['part'] = part
+    return render_template_string(INDEX_TEMPLATE, books=books_data)
 
+# ------------------ Запуск ------------------
 if __name__ == '__main__':
-    # Инициализируем базу данных при запуске
     with app.app_context():
         init_db()
-        # Проверим, есть ли уже записи в БД
         db = get_db()
         cursor = db.cursor()
         cursor.execute('SELECT COUNT(*) as count FROM wishlists')
         count = cursor.fetchone()['count']
-        print(f"📊 В БД НАХОДИТСЯ {count} СОХРАНЁННЫХ ВИШЛИСТОВ")
+        print(f"📊 В БД находится {count} сохранённых вишлистов")
     
-    # Для локального запуска и для хостинга
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 ЗАПУСК СЕРВЕРА НА ПОРТУ {port}")
+    print(f"🚀 Запуск сервера на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
