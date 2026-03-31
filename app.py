@@ -3,17 +3,12 @@ import re
 import hashlib
 import sqlite3
 import json
-import time
-import requests
-from bs4 import BeautifulSoup
 from flask import Flask, render_template_string, request, url_for, g
 
 app = Flask(__name__)
 
-# Путь к базе данных
 DATABASE = os.path.join(os.path.dirname(__file__), 'wishlist.db')
 
-# HTML-шаблон (с сортировкой и фильтрацией) – без изменений
 INDEX_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -54,7 +49,6 @@ INDEX_TEMPLATE = '''
 <body>
     <div class="container">
         <h1>📚 Книжный вишлист</h1>
-        
         <form method="post" id="mainForm" onsubmit="showLoading()">
             <textarea name="links" rows="8" placeholder="Вставьте ссылки на Wildberries (каждая с новой строки)">{{ request.form.get('links', '') }}</textarea>
             <br>
@@ -62,7 +56,6 @@ INDEX_TEMPLATE = '''
             <button type="submit" name="action" value="save">💾 Сохранить и получить ссылку</button>
             <div class="loading" id="loading">⏳ Загрузка данных с Wildberries, это может занять некоторое время...</div>
         </form>
-
         {% if saved_url %}
         <div class="share-link">
             <h3>🔗 Ссылка на ваш вишлист:</h3>
@@ -70,7 +63,6 @@ INDEX_TEMPLATE = '''
             <p>Скопируйте и отправьте друзьям!</p>
         </div>
         {% endif %}
-
         {% if books %}
         <div class="controls">
             <select class="sort-select" id="sortSelect">
@@ -78,7 +70,6 @@ INDEX_TEMPLATE = '''
                 <option value="price-desc">По цене (сначала дорогие)</option>
                 <option value="title">По названию</option>
             </select>
-            
             <div class="price-filter" id="priceFilter">
                 <button data-min="0" data-max="350">до 350 ₽</button>
                 <button data-min="351" data-max="550">351-550 ₽</button>
@@ -92,7 +83,6 @@ INDEX_TEMPLATE = '''
                 <button data-min="0" data-max="999999" class="active">Все</button>
             </div>
         </div>
-
         <div class="book-grid" id="bookGrid">
             {% for book in books %}
             <div class="book-card" data-price="{{ book.price }}" data-title="{{ book.title }}">
@@ -114,7 +104,6 @@ INDEX_TEMPLATE = '''
         <div class="stats">Найдено книг: <span id="bookCount">{{ books|length }}</span></div>
         {% endif %}
     </div>
-
     <script>
     function loadImage(img, vol, part, art, attempt = 1) {
         if (attempt > 50) {
@@ -131,30 +120,23 @@ INDEX_TEMPLATE = '''
             loadImage(img, vol, part, art, attempt + 1);
         };
     }
-
     function showLoading() {
         document.getElementById('loading').style.display = 'block';
     }
-
-    // Сортировка и фильтрация
     document.addEventListener('DOMContentLoaded', function() {
         const bookGrid = document.getElementById('bookGrid');
+        if (!bookGrid) return;
         const bookCards = Array.from(document.querySelectorAll('.book-card'));
         const sortSelect = document.getElementById('sortSelect');
         const priceFilter = document.getElementById('priceFilter');
         const bookCountSpan = document.getElementById('bookCount');
-
         let currentFilterMin = 0;
         let currentFilterMax = 999999;
-
         function filterAndSort() {
-            // Фильтр по цене
             let filtered = bookCards.filter(card => {
                 const price = parseInt(card.dataset.price);
                 return price >= currentFilterMin && price <= currentFilterMax;
             });
-
-            // Сортировка
             const sortValue = sortSelect.value;
             filtered.sort((a, b) => {
                 if (sortValue === 'price-asc') {
@@ -165,26 +147,20 @@ INDEX_TEMPLATE = '''
                     return a.dataset.title.localeCompare(b.dataset.title);
                 }
             });
-
-            // Перестроить DOM
             bookGrid.innerHTML = '';
             filtered.forEach(card => bookGrid.appendChild(card));
             bookCountSpan.textContent = filtered.length;
         }
-
         sortSelect.addEventListener('change', filterAndSort);
-
         priceFilter.addEventListener('click', function(e) {
             if (e.target.tagName === 'BUTTON') {
                 priceFilter.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
                 e.target.classList.add('active');
-                
                 currentFilterMin = parseInt(e.target.dataset.min);
                 currentFilterMax = parseInt(e.target.dataset.max);
                 filterAndSort();
             }
         });
-
         filterAndSort();
     });
     </script>
@@ -192,7 +168,7 @@ INDEX_TEMPLATE = '''
 </html>
 '''
 
-# ------------------ Работа с базой данных ------------------
+# ----- Работа с БД -----
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
@@ -214,163 +190,11 @@ def init_db():
             CREATE TABLE IF NOT EXISTS wishlists (
                 id TEXT PRIMARY KEY,
                 arts TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                books_data TEXT
             )
         ''')
-        cursor.execute("PRAGMA table_info(wishlists)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'books_data' not in columns:
-            cursor.execute("ALTER TABLE wishlists ADD COLUMN books_data TEXT")
-            db.commit()
-            print("✅ Добавлена колонка books_data в таблицу wishlists")
         db.commit()
-
-# ------------------ Функция получения данных (API поиска + fallback) ------------------
-def fetch_book_data(art):
-    """Получить данные о книге сначала через поисковый API, затем через HTML-парсинг"""
-    # 1. Пытаемся через поисковый API (ранее работал)
-    search_url = "https://search.wb.ru/exactmatch/ru/common/v4/search"
-    params = {
-        'query': art,
-        'resultset': 'catalog',
-        'sort': 'popular',
-        'limit': 1,
-        'spp': '30',
-        'curr': 'rub',
-        'dest': '-1257786'
-    }
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Referer': 'https://www.wildberries.ru/',
-        'Origin': 'https://www.wildberries.ru',
-    }
-    try:
-        time.sleep(1.5)  # задержка между запросами
-        resp = requests.get(search_url, params=params, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            products = data.get('data', {}).get('products', [])
-            if products and str(products[0].get('id')) == art:
-                prod = products[0]
-                title = prod.get('name', f'Книга {art}')
-                price = prod.get('salePriceU') or prod.get('priceU', 0)
-                old_price = prod.get('priceU', 0)
-                price = price // 100 if price else 0
-                old_price = old_price // 100 if old_price else 0
-                return {
-                    'art': art,
-                    'title': title,
-                    'price': price,
-                    'old_price': old_price if old_price > price else None,
-                    'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
-                }
-        else:
-            print(f"⚠️ Поисковый API для {art} вернул статус {resp.status_code}")
-    except Exception as e:
-        print(f"⚠️ Ошибка поискового API для {art}: {e}")
-
-    # 2. Если поисковый API не сработал, пробуем парсинг HTML
-    return parse_html_fallback(art)
-
-def parse_html_fallback(art):
-    """Запасной метод: парсинг HTML страницы товара"""
-    url = f"https://www.wildberries.ru/catalog/{art}/detail.aspx"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Connection': 'keep-alive',
-    }
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code != 200:
-            print(f"⚠️ Ошибка загрузки страницы для {art}: статус {resp.status_code}")
-            return None
-        soup = BeautifulSoup(resp.text, 'html.parser')
-
-        # Название
-        title = f'Книга {art}'
-        title_tag = soup.find('h1', class_='product-page__title')
-        if not title_tag:
-            title_tag = soup.find('h1')
-        if title_tag:
-            title = title_tag.text.strip()
-
-        # Цены
-        price = 0
-        old_price = None
-
-        # Ищем в JSON-скрипте
-        script_tag = soup.find('script', text=re.compile(r'window\.__IM__\s*='))
-        if script_tag:
-            script_text = script_tag.string
-            match = re.search(r'window\.__IM__\s*=\s*({.*?});\s*$', script_text, re.DOTALL)
-            if match:
-                try:
-                    data = json.loads(match.group(1))
-                    products = data.get('state', {}).get('products', [])
-                    if products:
-                        prod = products[0]
-                        price = prod.get('salePriceU') or prod.get('priceU', 0)
-                        old_price = prod.get('priceU', 0)
-                        price = price // 100 if price else 0
-                        old_price = old_price // 100 if old_price else 0
-                except:
-                    pass
-
-        # Если не нашли, ищем в HTML
-        if price == 0:
-            final_price_elem = soup.find('span', class_='final-price')
-            if not final_price_elem:
-                final_price_elem = soup.find('span', class_='price-block__final-price')
-            if final_price_elem:
-                price_text = final_price_elem.text.replace('₽', '').strip()
-                price = int(re.sub(r'\D', '', price_text)) if price_text else 0
-
-            old_price_elem = soup.find('del', class_='price-block__old-price')
-            if old_price_elem:
-                old_text = old_price_elem.text.replace('₽', '').strip()
-                old_price = int(re.sub(r'\D', '', old_text)) if old_text else None
-
-        return {
-            'art': art,
-            'title': title,
-            'price': price,
-            'old_price': old_price if old_price and old_price > price else None,
-            'url': url
-        }
-    except Exception as e:
-        print(f"❌ Ошибка при парсинге {art}: {e}")
-        return None
-
-# ------------------ Сохранение и получение вишлистов ------------------
-def save_wishlist_to_db(wish_id, arts_list):
-    books_data = []
-    total = len(arts_list)
-    for idx, art in enumerate(arts_list, 1):
-        print(f"⏳ Загружаю {idx}/{total}: артикул {art}")
-        data = fetch_book_data(art)
-        if data:
-            books_data.append(data)
-        else:
-            books_data.append({
-                'art': art,
-                'title': f'Книга {art}',
-                'price': 0,
-                'old_price': None,
-                'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
-            })
-    with app.app_context():
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute(
-            'INSERT OR REPLACE INTO wishlists (id, arts, books_data) VALUES (?, ?, ?)',
-            (wish_id, ','.join(arts_list), json.dumps(books_data, ensure_ascii=False))
-        )
-        db.commit()
-    print(f"✅ Вишлист {wish_id} сохранён с {len(books_data)} книгами")
-    return books_data
 
 def get_wishlist_from_db(wish_id):
     with app.app_context():
@@ -382,7 +206,6 @@ def get_wishlist_from_db(wish_id):
             return json.loads(row['books_data'])
         return None
 
-# ------------------ Вспомогательные функции ------------------
 def extract_articul(link):
     match = re.search(r'catalog/(\d+)', link)
     return match.group(1) if match else None
@@ -397,77 +220,94 @@ def generate_hash(arts):
     data = ','.join(sorted(arts))
     return hashlib.md5(data.encode()).hexdigest()[:8]
 
-# ------------------ Маршруты ------------------
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
         raw_links = request.form.get('links', '').splitlines()
         links = [l.strip() for l in raw_links if l.strip()]
         action = request.form.get('action', 'show')
-        
         if not links:
             return render_template_string(INDEX_TEMPLATE, error='Введите ссылки')
-        
         arts = set()
         for link in links:
             art = extract_articul(link)
             if art:
                 arts.add(art)
         arts_list = list(arts)
-        
         if action == 'save':
             wish_id = generate_hash(arts_list)
-            books_data = save_wishlist_to_db(wish_id, arts_list)
+            with app.app_context():
+                db = get_db()
+                cursor = db.cursor()
+                cursor.execute('INSERT OR REPLACE INTO wishlists (id, arts) VALUES (?, ?)',
+                               (wish_id, ','.join(arts_list)))
+                db.commit()
             saved_url = url_for('show_wishlist', wish_id=wish_id, _external=True)
+            # Показываем заглушку (без названий/цен, только артикулы)
+            books_data = []
+            for art in arts_list:
+                vol, part = get_vol_part(art)
+                books_data.append({
+                    'art': art,
+                    'vol': vol,
+                    'part': part,
+                    'title': f'Книга {art}',
+                    'price': 0,
+                    'old_price': None,
+                    'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
+                })
             return render_template_string(INDEX_TEMPLATE, books=books_data, saved_url=saved_url, request=request)
         else:
+            # Режим "только показать" – формируем заглушку без сохранения
             books_data = []
-            total = len(arts_list)
-            for idx, art in enumerate(arts_list, 1):
-                print(f"⏳ Загружаю {idx}/{total}: артикул {art}")
-                data = fetch_book_data(art)
-                if data:
-                    vol, part = get_vol_part(art)
-                    data['vol'] = vol
-                    data['part'] = part
-                    books_data.append(data)
-                else:
-                    vol, part = get_vol_part(art)
-                    books_data.append({
-                        'art': art,
-                        'vol': vol,
-                        'part': part,
-                        'title': f'Книга {art}',
-                        'price': 0,
-                        'old_price': None,
-                        'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
-                    })
+            for art in arts_list:
+                vol, part = get_vol_part(art)
+                books_data.append({
+                    'art': art,
+                    'vol': vol,
+                    'part': part,
+                    'title': f'Книга {art}',
+                    'price': 0,
+                    'old_price': None,
+                    'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
+                })
             return render_template_string(INDEX_TEMPLATE, books=books_data, request=request)
-    
     return render_template_string(INDEX_TEMPLATE)
 
 @app.route('/wishlist/<wish_id>')
 def show_wishlist(wish_id):
     books_data = get_wishlist_from_db(wish_id)
     if books_data is None:
-        return "Вишлист не найден. Возможно, он был удалён или ещё не создан.", 404
-    
-    for book in books_data:
-        vol, part = get_vol_part(book['art'])
-        book['vol'] = vol
-        book['part'] = part
+        # Если данных нет, пробуем достать список артикулов из колонки arts
+        with app.app_context():
+            db = get_db()
+            cursor = db.cursor()
+            cursor.execute('SELECT arts FROM wishlists WHERE id = ?', (wish_id,))
+            row = cursor.fetchone()
+            if not row:
+                return "Вишлист не найден. Возможно, он был удалён или ещё не создан.", 404
+            arts_list = row['arts'].split(',')
+        books_data = []
+        for art in arts_list:
+            vol, part = get_vol_part(art)
+            books_data.append({
+                'art': art,
+                'vol': vol,
+                'part': part,
+                'title': f'Книга {art}',
+                'price': 0,
+                'old_price': None,
+                'url': f'https://www.wildberries.ru/catalog/{art}/detail.aspx'
+            })
+    else:
+        for book in books_data:
+            vol, part = get_vol_part(book['art'])
+            book['vol'] = vol
+            book['part'] = part
     return render_template_string(INDEX_TEMPLATE, books=books_data)
 
-# ------------------ Запуск ------------------
 if __name__ == '__main__':
     with app.app_context():
         init_db()
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute('SELECT COUNT(*) as count FROM wishlists')
-        count = cursor.fetchone()['count']
-        print(f"📊 В БД находится {count} сохранённых вишлистов")
-    
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 Запуск сервера на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
